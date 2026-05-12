@@ -215,19 +215,26 @@ function renderBarChart() {
   const desp  = months.map(m => lancamentos.filter(l => monthKey(l.data) === m && l.tipo === 'Despesa').reduce((s,l) => s+l.val, 0));
   const saldo = months.map((_, i) => parseFloat((rec[i] - desp[i]).toFixed(2)));
 
-  if (barChart) barChart.destroy();
-  barChart = new Chart(document.getElementById('barChart'), {
+  if (barChart) { barChart.destroy(); barChart = null; }
+
+  const ctx = document.getElementById('barChart');
+  if (!ctx) return;
+
+  barChart = new Chart(ctx, {
+    type: 'bar',
     data: {
       labels,
       datasets: [
-        { type:'bar',  label:'Receita', data: rec,   backgroundColor:'rgba(52,211,153,0.7)',  borderRadius:5 },
-        { type:'bar',  label:'Despesa', data: desp,  backgroundColor:'rgba(248,113,113,0.7)', borderRadius:5 },
-        { type:'line', label:'Saldo',   data: saldo, borderColor:'#a78bfa', backgroundColor:'rgba(167,139,250,0.08)',
-          fill:true, tension:0.35, pointBackgroundColor:'#a78bfa', pointRadius:4, borderWidth:2 },
+        { label:'Receita', data: rec,   backgroundColor:'rgba(52,211,153,0.75)',  borderRadius:5, order:2 },
+        { label:'Despesa', data: desp,  backgroundColor:'rgba(248,113,113,0.75)', borderRadius:5, order:3 },
+        { label:'Saldo',   data: saldo, type:'line', borderColor:'#a78bfa',
+          backgroundColor:'rgba(167,139,250,0.08)', fill:true, tension:0.35,
+          pointBackgroundColor:'#a78bfa', pointRadius:4, borderWidth:2, order:1 },
       ]
     },
     options: {
-      responsive: true, maintainAspectRatio: false,
+      responsive: true,
+      maintainAspectRatio: false,
       plugins: { legend:{ display:false } },
       scales: {
         x: { ticks:{ color:'#888899', font:{size:11}, autoSkip:false }, grid:{ color:'rgba(255,255,255,0.04)' } },
@@ -246,16 +253,27 @@ function renderPieChart(data) {
   const total  = vals.reduce((a,b) => a+b, 0);
   const colors = labels.map((_, i) => CAT_COLORS[i % CAT_COLORS.length]);
 
-  if (pieChart) pieChart.destroy();
-  pieChart = new Chart(document.getElementById('pieChart'), {
+  if (pieChart) { pieChart.destroy(); pieChart = null; }
+
+  const ctx = document.getElementById('pieChart');
+  if (!ctx) return;
+
+  // Sem dados de despesa: mostra placeholder
+  if (!labels.length) {
+    document.getElementById('pieLegend').innerHTML = '<span style="color:var(--muted);font-size:12px">Nenhuma despesa no período</span>';
+    return;
+  }
+
+  pieChart = new Chart(ctx, {
     type: 'doughnut',
     data: { labels, datasets: [{ data:vals, backgroundColor:colors, borderWidth:0 }] },
     options: {
-      responsive:true, maintainAspectRatio:false,
-      cutout:'62%',
+      responsive: true,
+      maintainAspectRatio: false,
+      cutout: '62%',
       plugins: {
-        legend:{ display:false },
-        tooltip:{ callbacks:{ label: ctx => `${ctx.label}: ${fmt(ctx.raw)}` } }
+        legend: { display:false },
+        tooltip: { callbacks: { label: ctx => `${ctx.label}: ${fmt(ctx.raw)}` } }
       }
     }
   });
@@ -314,29 +332,30 @@ function setToday() {
 
 document.getElementById('btnSalvar').addEventListener('click', () => {
   const desc  = document.getElementById('fDesc').value.trim();
-  const valor = parseFloat(document.getElementById('fValor').value);
+  const valorRaw = document.getElementById('fValor').value;
+  const valor = parseFloat(valorRaw);
   const data  = document.getElementById('fData').value;
   const cat   = document.getElementById('fCat').value;
   const conta = document.getElementById('fConta').value;
   const obs   = document.getElementById('fObs').value.trim();
   const tipo  = activeTipo('tipoToggle');
 
-  if (!desc || !valor || !data || !cat) {
-    showMsg('formMsg', 'Preencha todos os campos obrigatórios.', '#f87171');
-    return;
-  }
+  if (!desc) { showMsg('formMsg', 'Informe a descrição.', '#f87171'); return; }
+  if (!valorRaw || isNaN(valor) || valor <= 0) { showMsg('formMsg', 'Informe um valor válido maior que zero.', '#f87171'); return; }
+  if (!data) { showMsg('formMsg', 'Informe a data.', '#f87171'); return; }
+  if (!cat) { showMsg('formMsg', 'Selecione a categoria.', '#f87171'); return; }
 
   const novo = { id: uid(), data, desc, tipo, cat, conta, val: valor, obs };
   lancamentos.push(novo);
   saveData(lancamentos);
 
   // Reset form
-  document.getElementById('fDesc').value = '';
+  document.getElementById('fDesc').value  = '';
   document.getElementById('fValor').value = '';
-  document.getElementById('fObs').value = '';
+  document.getElementById('fObs').value   = '';
   setToday();
-  showMsg('formMsg', 'Lançamento salvo!', '#34d399');
-  setTimeout(() => { document.getElementById('formMsg').textContent = ''; }, 2500);
+  showMsg('formMsg', '✓ Lançamento salvo com sucesso!', '#34d399');
+  setTimeout(() => { document.getElementById('formMsg').textContent = ''; }, 3000);
 });
 
 function showMsg(id, msg, color) {
@@ -346,12 +365,23 @@ function showMsg(id, msg, color) {
 }
 
 // ── Histórico ─────────────────────────────────────────────────────────────────
+let histFiltersInit = false;
+
 function renderHistorico() {
-  // Populate month filter
+  // Atualiza o select de meses sem perder a seleção atual
   const filterMes = document.getElementById('filterMes');
+  const currentVal = filterMes.value;
   const months = allMonths();
   filterMes.innerHTML = `<option value="">Todos os meses</option>` +
-    months.map(m => `<option value="${m}">${monthLabel(m)}</option>`).join('');
+    months.map(m => `<option value="${m}"${m === currentVal ? ' selected' : ''}>${monthLabel(m)}</option>`).join('');
+
+  // Registra os listeners apenas uma vez
+  if (!histFiltersInit) {
+    document.getElementById('searchInput').addEventListener('input', applyHistFilters);
+    document.getElementById('filterTipo').addEventListener('change', applyHistFilters);
+    document.getElementById('filterMes').addEventListener('change', applyHistFilters);
+    histFiltersInit = true;
+  }
 
   applyHistFilters();
 }
@@ -390,23 +420,29 @@ function applyHistFilters() {
   });
 }
 
-document.getElementById('searchInput').addEventListener('input', applyHistFilters);
-document.getElementById('filterTipo').addEventListener('change', applyHistFilters);
-document.getElementById('filterMes').addEventListener('change', applyHistFilters);
+
 
 // ── Modal Edição ──────────────────────────────────────────────────────────────
 function openEditModal(id) {
   const l = lancamentos.find(x => x.id === id);
   if (!l) return;
   editingId = id;
+
+  // Popula os selects primeiro, depois define os valores
   populateSelects('eCat','eConta');
   setActiveTipo('editTipoToggle', l.tipo);
+
   document.getElementById('eDesc').value  = l.desc;
   document.getElementById('eValor').value = l.val;
   document.getElementById('eData').value  = l.data;
-  document.getElementById('eCat').value   = l.cat;
-  document.getElementById('eConta').value = l.conta;
   document.getElementById('eObs').value   = l.obs || '';
+
+  // Aguarda o DOM atualizar antes de setar o valor do select
+  requestAnimationFrame(() => {
+    document.getElementById('eCat').value   = l.cat;
+    document.getElementById('eConta').value = l.conta;
+  });
+
   document.getElementById('editModal').style.display = 'flex';
 }
 
